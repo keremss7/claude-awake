@@ -208,6 +208,34 @@ The hook listener binds to `127.0.0.1` only and requires a token from `~/.claude
 (mode `0600`). Without it, any web page could POST to loopback — no CORS preflight is required
 for that — and pin your laptop awake.
 
+### Why did it (not) stay awake?
+
+The whole decision lives in memory, which makes "it said idle while I was clearly
+working" impossible to answer after the fact. So the detector will tell you what it
+believes:
+
+```bash
+curl -sS -H "X-Claude-Awake: $(cat ~/.claude-awake/token)" \
+     -X POST --data diagnose "http://127.0.0.1:$(cat ~/.claude-awake/port)/state" | jq
+```
+
+```json
+{
+  "hooksReporting": true,
+  "processScanSeesClaude": true,
+  "anyBusy": true,
+  "withinGrace": false,
+  "secsSinceLastTurnEnded": null,
+  "sessions": [
+    { "session": "143ee212-…", "busy": true, "secsSinceEvent": 0, "claimFresh": true }
+  ]
+}
+```
+
+`claimFresh: false` on a session you believe is working means hook events stopped
+arriving — usually because `PreToolUse`/`PostToolUse` are not registered. Re-run
+`scripts/install-hooks.sh`.
+
 ## Known limitations
 
 - **Window tracking is best-effort.** The pill follows the frontmost terminal by polling every

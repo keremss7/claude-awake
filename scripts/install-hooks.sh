@@ -6,7 +6,7 @@
 # awake for both. With them, UserPromptSubmit/Stop bracket the real work and
 # protection lifts as soon as the agent finishes.
 #
-# Four events per session, two per turn. The overhead is a loopback curl.
+# The overhead is one loopback curl per event.
 #
 #   bash install-hooks.sh            # add
 #   bash install-hooks.sh --remove   # take them back out
@@ -56,9 +56,19 @@ def strip(event):
     else:
         hooks.pop(event, None)
 
-# SessionStart/SessionEnd bound the session; UserPromptSubmit/Stop bound each
-# turn of work inside it.
-for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "Stop"):
+# SessionStart/SessionEnd bound the session and UserPromptSubmit/Stop bound each
+# turn. PreToolUse/PostToolUse/Notification are heartbeats: a turn that runs for
+# hours emits no Stop, so without them a long job ages out of the activity window
+# and protection drops in the middle of exactly the work this tool exists for.
+for event in (
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "Stop",
+    "PreToolUse",
+    "PostToolUse",
+    "Notification",
+):
     strip(event)
     if mode != "--remove":
         hooks.setdefault(event, []).append(

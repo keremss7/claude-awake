@@ -26,9 +26,16 @@ use std::time::{Duration, Instant};
 const BASE_PORT: u16 = 47821;
 const PORT_TRIES: u16 = 12;
 const POLL_INTERVAL: Duration = Duration::from_secs(4);
-/// How long a hook-reported session stays trusted without any further signal.
-/// A turn that runs longer than this without a single hook event is assumed dead.
-const HOOK_TTL: Duration = Duration::from_secs(60 * 60);
+/// How long a session is remembered at all without any hook event.
+const HOOK_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+/// How long a turn stays believed-busy on the strength of its last event.
+///
+/// A missed `Stop` (crash, kill -9, a hook that failed to fire) would otherwise
+/// pin the machine awake forever, so being busy is a claim that has to be
+/// renewed. Tool-call hooks renew it constantly; the window only has to be wider
+/// than the longest realistic gap between them, which is a stretch of pure
+/// reasoning with no tool use.
+const ACTIVITY_TTL: Duration = Duration::from_secs(20 * 60);
 /// Protection lingers this long after the last turn ends. Absorbs the gap between
 /// a `Stop` and the follow-up prompt a user is already typing, so a conversation
 /// does not flap the machine's power settings every few seconds.
@@ -132,18 +139,61 @@ impl Detector {
     }
 
     fn handle(&self, mut stream: TcpStream) {
-        let Some((authorized, body)) = read_request(&mut stream) else {
+        let Some(request) = read_request(&mut stream) else {
             let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
             return;
         };
         // Any web page can POST to loopback without CORS, so the shared token is
         // what stops a random site from pinning this laptop awake.
-        if !authorized {
+        if !request.authorized {
             let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
             return;
         }
-        self.ingest(&body);
+        if request.diagnostic {
+            let body = self.describe();
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .as_bytes(),
+            );
+            return;
+        }
+        self.ingest(&request.body);
         let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+    }
+
+    /// Dumps what the detector currently believes. Exists because "why did it
+    /// think Claude was idle" is otherwise unanswerable after the fact — the whole
+    /// decision lives in memory. Token-gated like everything else on this port.
+    ///
+    ///     curl -sS -H "X-Claude-Awake: $(cat ~/.claude-awake/token)" \
+    ///          -X POST --data diagnose "http://127.0.0.1:$(cat ~/.claude-awake/port)/state"
+    fn describe(&self) -> String {
+        let hooks = self.hooks.lock().unwrap();
+        let sessions: Vec<serde_json::Value> = hooks
+            .sessions
+            .iter()
+            .map(|(id, state)| {
+                serde_json::json!({
+                    "session": id,
+                    "busy": state.busy,
+                    "secsSinceEvent": state.last_event.elapsed().as_secs(),
+                    "claimFresh": state.last_event.elapsed() < ACTIVITY_TTL,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "hooksReporting": hooks.ever_reported,
+            "processScanSeesClaude": self.proc_active.load(Ordering::Relaxed),
+            "anyBusy": hooks.any_busy(),
+            "withinGrace": hooks.within_grace(),
+            "secsSinceLastTurnEnded": hooks.last_busy_end.map(|t| t.elapsed().as_secs()),
+            "sessions": sessions,
+        })
+        .to_string()
     }
 
     /// Accepts a raw Claude Code hook payload.
@@ -183,7 +233,11 @@ impl HookState {
                 }
                 return;
             }
-            "Stop" | "SubagentStop" => {
+            // Only the main agent's Stop ends a turn. SubagentStop fires while
+            // the parent is still working, so treating it as the end would drop
+            // protection in the middle of exactly the long fan-out runs this tool
+            // exists for.
+            "Stop" => {
                 if let Some(state) = self.sessions.get_mut(&session) {
                     state.busy = false;
                     state.last_event = now;
@@ -194,9 +248,9 @@ impl HookState {
             _ => {}
         }
 
-        // SessionStart registers an idle session. Anything else that arrives —
-        // UserPromptSubmit, or a hook type that did not exist when this was
-        // written — is evidence of work in flight, so it opens a turn. Erring
+        // SessionStart registers an idle session. Everything else — a submitted
+        // prompt, a tool call, a subagent finishing, or a hook type that did not
+        // exist when this was written — is evidence of work in flight. Erring
         // toward busy on an unknown event keeps a future Claude Code release from
         // silently letting the machine sleep mid-task.
         let busy = event != "SessionStart";
@@ -223,8 +277,12 @@ impl HookState {
             .filter(|s| s.last_event.elapsed() < HOOK_TTL)
     }
 
+    /// A session counts as busy only while its claim is fresh. Without the age
+    /// check a single missed `Stop` would hold the machine up indefinitely.
     fn any_busy(&self) -> bool {
-        self.live_sessions().any(|s| s.busy)
+        self.sessions
+            .values()
+            .any(|s| s.busy && s.last_event.elapsed() < ACTIVITY_TTL)
     }
 
     fn within_grace(&self) -> bool {
@@ -237,15 +295,23 @@ fn bind_loopback() -> Option<TcpListener> {
         .find_map(|i| TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, BASE_PORT + i)).ok())
 }
 
-/// Returns `(token_matched, body)`. Deliberately minimal: this endpoint only ever
-/// speaks to a `curl` line we generated ourselves.
-fn read_request(stream: &mut TcpStream) -> Option<(bool, String)> {
+struct HookRequest {
+    authorized: bool,
+    /// True for `/state`, which reports rather than mutates.
+    diagnostic: bool,
+    body: String,
+}
+
+/// Deliberately minimal: this endpoint only ever speaks to a `curl` line we
+/// generated ourselves.
+fn read_request(stream: &mut TcpStream) -> Option<HookRequest> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
     if !line.starts_with("POST ") {
         return None;
     }
+    let diagnostic = line.split_whitespace().nth(1) == Some("/state");
 
     let mut length = 0usize;
     let mut token = String::new();
@@ -270,10 +336,11 @@ fn read_request(stream: &mut TcpStream) -> Option<(bool, String)> {
 
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body).ok()?;
-    Some((
-        constant_time_eq(token.as_bytes(), expected_token().as_bytes()),
-        String::from_utf8_lossy(&body).into_owned(),
-    ))
+    Some(HookRequest {
+        authorized: constant_time_eq(token.as_bytes(), expected_token().as_bytes()),
+        diagnostic,
+        body: String::from_utf8_lossy(&body).into_owned(),
+    })
 }
 
 /// Directory holding the two files a shell hook needs to reach us.
@@ -423,6 +490,40 @@ mod tests {
         h.apply("UserPromptSubmit", "b".into());
         h.apply("Stop", "a".into());
         assert!(h.any_busy(), "b is still working");
+    }
+
+    /// The reported failure: a long turn emits no `Stop`, so without tool-call
+    /// heartbeats it ages out of the activity window and protection drops
+    /// mid-work.
+    #[test]
+    fn tool_activity_renews_a_long_running_turn() {
+        let mut h = state();
+        h.apply("UserPromptSubmit", "a".into());
+        // Simulate the claim going stale, as it would during a multi-hour job.
+        h.sessions.get_mut("a").unwrap().last_event = Instant::now() - ACTIVITY_TTL * 2;
+        assert!(!h.any_busy(), "a stale claim must not hold the machine up");
+
+        h.apply("PostToolUse", "a".into());
+        assert!(h.any_busy(), "a tool call proves the turn is still alive");
+    }
+
+    /// A subagent finishing says nothing about the parent turn, which is usually
+    /// still fanning out more work.
+    #[test]
+    fn subagent_stop_does_not_end_the_turn() {
+        let mut h = state();
+        h.apply("UserPromptSubmit", "a".into());
+        h.apply("SubagentStop", "a".into());
+        assert!(h.any_busy());
+    }
+
+    /// A `Stop` that never arrives must not pin the machine awake forever.
+    #[test]
+    fn a_missed_stop_heals_itself() {
+        let mut h = state();
+        h.apply("UserPromptSubmit", "a".into());
+        h.sessions.get_mut("a").unwrap().last_event = Instant::now() - ACTIVITY_TTL * 2;
+        assert!(!h.any_busy());
     }
 
     #[test]
