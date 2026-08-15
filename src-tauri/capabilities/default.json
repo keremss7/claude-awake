@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Everything the overlay pill and the settings panel need. The app's own commands are the only privileged surface; no filesystem, shell or HTTP capability is granted to the webview.",
+  "windows": ["overlay", "panel"],
+  "permissions": ["core:default"]
+}

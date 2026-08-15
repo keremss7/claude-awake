@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "../scripts/install-helper.sh": "install-helper.sh",
+      "../scripts/uninstall-helper.sh": "uninstall-helper.sh"
+    }
+  }
+}

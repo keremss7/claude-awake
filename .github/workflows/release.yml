@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Dispatch from a tag ref to re-run a release. Deliberately no free-text input:
+  # an attacker-controlled string reaching `ref:` or `tag_name:` is a known
+  # workflow-injection footgun, and the ref picker already does the job.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One universal macOS build rather than two: an Intel user should not
+          # have to work out which download is theirs.
+          - os: macos-latest
+            target: universal-apple-darwin
+            prepare: --universal
+          - os: windows-latest
+            target: ""
+            prepare: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add macOS targets
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      - name: Build helper
+        run: node scripts/prepare-helper.mjs ${{ matrix.prepare }}
+      - name: Bundle
+        run: npx tauri build ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          find src-tauri/target -path '*release/bundle/dmg/*.dmg' -exec cp {} out/ \;
+          find src-tauri/target -path '*release/bundle/nsis/*.exe' -exec cp {} out/ \;
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.os }}
+          path: out/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: artifacts/*
+          body: |
+            ## Install
+
+            **macOS** — download the `.dmg`, drag to `/Applications`, then:
+
+            ```bash
+            xattr -dr com.apple.quarantine "/Applications/Claude Awake.app"
+            sudo bash "/Applications/Claude Awake.app/Contents/Resources/install-helper.sh"
+            ```
+
+            **Windows** — run the `.exe` installer. It registers the helper service for you.
+
+            Builds are unsigned. Verify what you run, or build from source.

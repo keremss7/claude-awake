@@ -1,0 +1,58 @@
+[package]
+name = "claude-awake"
+version = "0.1.0"
+description = "Keeps the machine awake while Claude Code is working"
+edition = "2021"
+rust-version = "1.82"
+
+[lib]
+name = "claude_awake_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "claude-awake"
+path = "src/main.rs"
+
+# The privileged half. Deliberately a separate binary: it links no UI code, so
+# the thing running as root stays small enough to read in one sitting.
+[[bin]]
+name = "claude-awake-helperd"
+path = "src/bin/helperd.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+objc2 = "0.6"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Power",
+  "Win32_System_Threading",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

@@ -1,0 +1,40 @@
+{
+  "name": "claude-awake",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "helper:build": "node scripts/prepare-helper.mjs",
+    "icons": "python3 scripts/make-icons.py",
+    "app:dev": "node scripts/prepare-helper.mjs --debug && tauri dev",
+    "app:build": "node scripts/prepare-helper.mjs && tauri build",
+    "lint": "tsc --noEmit",
+    "app:build:universal": "node scripts/prepare-helper.mjs --universal && tauri build --target universal-apple-darwin"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-autostart": "^2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@tailwindcss/vite": "^4",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  },
+  "description": "Keeps your machine awake while Claude Code is working \u2014 lid closed, battery ignored, Wi-Fi up.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/keremss7/claude-awake.git"
+  }
+}

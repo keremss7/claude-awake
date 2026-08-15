@@ -1,0 +1,32 @@
+name: Add terminal support
+description: The pill does not appear for my terminal
+labels: [terminal-support, good first issue]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Terminals are recognised by name from a list. Adding one is a single line —
+        feel free to open a PR against `TERMINALS` in `src-tauri/src/tracker/mod.rs`
+        instead of an issue.
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      placeholder: "Ghostty 1.2, WezTerm nightly, …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Diagnostic output
+      description: |
+        Run this, click into your terminal, and paste what it prints:
+
+        ```
+        cargo run --manifest-path src-tauri/Cargo.toml --example windows
+        ```
+      render: text
+    validations:
+      required: true

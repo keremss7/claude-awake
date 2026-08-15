@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Type-check
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # tauri-build reads the frontend dist directory, so it has to exist before
+      # anything in src-tauri is compiled.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: Format
+        if: matrix.os == 'macos-latest'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build binaries
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bins
+
+  bundle:
+    name: bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            prepare: --universal
+          - os: windows-latest
+            target: ""
+            prepare: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add macOS targets
+        if: matrix.os == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Build helper
+        run: node scripts/prepare-helper.mjs ${{ matrix.prepare }}
+      - name: Bundle
+        run: npx tauri build ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-awake-${{ matrix.os }}
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14

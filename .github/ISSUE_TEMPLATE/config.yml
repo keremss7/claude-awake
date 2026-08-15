@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Windows testing feedback
+    url: https://github.com/keremss7/claude-awake/discussions
+    about: Tried it on Windows? Good or bad, that report is the most useful thing right now.
+  - name: Security vulnerability
+    url: https://github.com/keremss7/claude-awake/security/advisories/new
+    about: Please report privately rather than in a public issue.

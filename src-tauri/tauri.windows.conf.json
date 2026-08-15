@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "resources": {
+      "../scripts/install-helper.ps1": "install-helper.ps1",
+      "../scripts/uninstall-helper.ps1": "uninstall-helper.ps1"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
+  }
+}

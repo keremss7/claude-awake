@@ -1,0 +1,70 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: if the pill simply never appears, run
+        `cargo run --manifest-path src-tauri/Cargo.toml --example windows`, click into your
+        terminal, and paste the output below — that is almost always an unrecognised terminal
+        rather than a bug.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows 11
+        - Windows 10
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Claude Awake version
+      description: Shown at the bottom of the settings panel.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start a Claude Code session in Ghostty
+        2. Close the lid
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: state
+    attributes:
+      label: Helper state
+      description: |
+        Helps enormously. Paste the output of:
+
+        macOS: `printf '{"cmd":"ping"}\n' | nc -U /var/run/claude-awake.sock; pmset -g | grep SleepDisabled`
+        Windows: `Get-Service ClaudeAwakeHelper; powercfg /query SCHEME_CURRENT 4f971e89-eebd-4455-a8de-9e59040e7347`
+      render: shell
+
+  - type: checkboxes
+    id: helper
+    attributes:
+      label: Confirmations
+      options:
+        - label: The privileged helper is installed (the settings panel says "Installed and running")
+        - label: I checked existing issues for a duplicate
