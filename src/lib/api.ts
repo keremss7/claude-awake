@@ -19,8 +19,12 @@ export interface Snapshot {
   mode: Mode;
   /** True when sleep is actually being blocked right now. */
   protecting: boolean;
-  /** True when a Claude Code session is running. */
+  /** A Claude Code session exists, busy or not. */
   claudeActive: boolean;
+  /** A turn is actually in flight. Only meaningful when `preciseDetection`. */
+  claudeBusy: boolean;
+  /** Hook events drive Auto mode, rather than the coarse process scan. */
+  preciseDetection: boolean;
   helper: HelperStatus;
   helperDetail: string;
   guards: Guards;
@@ -36,6 +40,8 @@ export const EMPTY: Snapshot = {
   mode: "auto",
   protecting: false,
   claudeActive: false,
+  claudeBusy: false,
+  preciseDetection: false,
   helper: "missing",
   helperDetail: "",
   guards: { lid: false, battery: false, wifi: false, display: false },
@@ -64,6 +70,8 @@ function mockSnapshot(): Snapshot {
     mode: (q.get("mode") as Mode) ?? (protecting ? "auto" : "off"),
     protecting,
     claudeActive: flag("claude"),
+    claudeBusy: flag("busy"),
+    preciseDetection: flag("precise"),
     helper: (q.get("helper") as HelperStatus) ?? (protecting ? "ok" : "missing"),
     helperDetail: q.get("detail") ?? "",
     guards: {

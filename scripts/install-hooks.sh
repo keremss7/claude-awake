@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Optional. Wires Claude Code's SessionStart/SessionEnd hooks to Claude Awake so
-# protection engages the instant a session opens instead of on the next 4s poll.
+# Wires four Claude Code hooks to Claude Awake. Strongly recommended.
 #
-# Everything works without this — the process scan is the source of truth. This
-# only removes latency and covers sessions the scan cannot see.
+# Without them the app can only ask "is the claude process running", which cannot
+# tell a working agent from a session parked at an empty prompt — so it stays
+# awake for both. With them, UserPromptSubmit/Stop bracket the real work and
+# protection lifts as soon as the agent finishes.
+#
+# Four events per session, two per turn. The overhead is a loopback curl.
 #
 #   bash install-hooks.sh            # add
 #   bash install-hooks.sh --remove   # take them back out
@@ -53,7 +56,9 @@ def strip(event):
     else:
         hooks.pop(event, None)
 
-for event in ("SessionStart", "SessionEnd"):
+# SessionStart/SessionEnd bound the session; UserPromptSubmit/Stop bound each
+# turn of work inside it.
+for event in ("SessionStart", "SessionEnd", "UserPromptSubmit", "Stop"):
     strip(event)
     if mode != "--remove":
         hooks.setdefault(event, []).append(

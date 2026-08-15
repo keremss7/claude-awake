@@ -105,20 +105,31 @@ Three modes:
 | Mode | Behaviour |
 |---|---|
 | **Off** | nothing is applied |
-| **Auto** *(default)* | engages while Claude Code runs, lifts when it stops |
+| **Auto** *(default)* | follows Claude Code — see below |
 | **Always** | stays awake until you turn it off |
 
 <img src="docs/settings.png" alt="The settings panel in dark and light themes" width="720">
 
-### Instant detection (optional)
+### Auto mode, and why you want the hooks
 
-The app finds Claude by scanning for the `claude` process every four seconds, which is enough
-on its own. If you want protection to engage the instant a session opens, wire up the hooks:
+Auto mode is only as good as what it can see, and there are two tiers.
+
+**Without hooks** the app can only scan for the `claude` process. That cannot tell a working
+agent from a session parked at an empty prompt — so both keep the machine awake. Correct, but
+it will happily hold a laptop up all night because you left a terminal open.
+
+**With hooks** Claude Code reports the start and end of every turn. `UserPromptSubmit` opens a
+working window, `Stop` closes it, and everything in between — thinking, tool calls, subagents —
+counts as work. An idle prompt does not. Protection lifts about a minute after the agent
+finishes, and the machine is free to sleep.
 
 ```bash
 bash scripts/install-hooks.sh            # writes to ~/.claude/settings.json, backup taken
 bash scripts/install-hooks.sh --remove   # undo
 ```
+
+Four events per session, two per turn; each is one loopback `curl`. The settings panel shows
+which tier is active under **Detection**.
 
 ## How it works
 
@@ -152,6 +163,11 @@ entire vocabulary, and every value written to the system comes from a compile-ti
 | `ttyskeepawake` | `1` | an active tty holds the machine up |
 | `lowpowermode`, `lessbright` | `0` (battery) | ignore the battery state |
 | `displaysleep` | `0` | **only** if you opt in |
+
+The display is a special case. `disablesleep` suppresses clamshell sleep wholesale, which also
+stops macOS from powering the panel down when the lid shuts — so with "Keep the display on"
+unchecked, the app watches the lid and issues `pmset displaysleepnow` on close. System sleep
+stays blocked; only the panel goes dark.
 
 Only keys the machine actually reports are touched, which guarantees every change can be
 undone.
@@ -204,6 +220,9 @@ for that — and pin your laptop awake.
 - **Terminals are recognised from a list** in [`src/tracker/mod.rs`](src-tauri/src/tracker/mod.rs).
   If yours is missing, run `cargo run --example windows`, and add the printed owner name (PRs
   welcome).
+- **Windows has no lid-close display handling yet.** The macOS side darkens the panel when the
+  lid shuts; the Windows equivalent needs `GUID_LIDSWITCH_STATE_CHANGE` notifications and is not
+  implemented.
 
 ## Project layout
 

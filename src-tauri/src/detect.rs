@@ -1,15 +1,21 @@
-//! Is a Claude Code session running?
+//! Is Claude Code doing anything worth staying awake for?
 //!
-//! Two independent signals, OR-ed together:
+//! Two tiers, because the honest answer depends on what the machine can see.
 //!
-//!   * **Process scan** — the source of truth. `claude` is a native binary, so an
-//!     exact-name match is unambiguous. Costs one `pgrep` every few seconds.
-//!   * **Hook pings** — Claude Code's `SessionStart` / `SessionEnd` hooks POST to a
-//!     loopback port. This removes the poll latency and covers sessions the process
-//!     scan cannot see. Hook state carries a TTL so a missed `SessionEnd` (crash,
-//!     `kill -9`) heals itself instead of pinning the machine awake forever.
+//! **Precise (hooks installed).** Claude Code's hooks bracket real work exactly:
+//! `UserPromptSubmit` opens a working turn, `Stop` closes it. Everything in
+//! between — thinking, tool calls, subagents — is one continuous busy period, and
+//! a session parked at an empty prompt is *not* busy. This is what lets protection
+//! lift the moment the agent finishes, instead of holding a laptop awake all night
+//! because a terminal happens to be open.
+//!
+//! **Coarse (no hooks).** Fall back to scanning for the `claude` process. It cannot
+//! tell working from idle, so it errs toward staying awake. Correct, just wasteful.
+//!
+//! Hook state carries a TTL so a missed `Stop` or `SessionEnd` (crash, `kill -9`)
+//! heals itself instead of pinning the machine awake forever.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +27,12 @@ const BASE_PORT: u16 = 47821;
 const PORT_TRIES: u16 = 12;
 const POLL_INTERVAL: Duration = Duration::from_secs(4);
 /// How long a hook-reported session stays trusted without any further signal.
-const HOOK_TTL: Duration = Duration::from_secs(15 * 60);
+/// A turn that runs longer than this without a single hook event is assumed dead.
+const HOOK_TTL: Duration = Duration::from_secs(60 * 60);
+/// Protection lingers this long after the last turn ends. Absorbs the gap between
+/// a `Stop` and the follow-up prompt a user is already typing, so a conversation
+/// does not flap the machine's power settings every few seconds.
+const IDLE_GRACE: Duration = Duration::from_secs(90);
 const MAX_BODY: usize = 64 * 1024;
 
 pub struct Detector {
@@ -31,8 +42,19 @@ pub struct Detector {
 
 #[derive(Default)]
 struct HookState {
-    sessions: HashSet<String>,
-    last_seen: Option<Instant>,
+    /// Session id -> when it last did something, and whether it is mid-turn.
+    sessions: HashMap<String, SessionState>,
+    /// When the last busy session went idle, for the grace period.
+    last_busy_end: Option<Instant>,
+    /// Set once any hook arrives. Until then the process scan is authoritative,
+    /// because "no busy sessions" and "hooks are not installed" look identical.
+    ever_reported: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SessionState {
+    busy: bool,
+    last_event: Instant,
 }
 
 impl Detector {
@@ -57,12 +79,39 @@ impl Detector {
         detector
     }
 
+    /// Should protection be engaged right now?
     pub fn active(&self) -> bool {
+        let hooks = self.hooks.lock().unwrap();
+        if hooks.ever_reported {
+            // Hooks are authoritative once they have spoken: their whole value is
+            // being able to say "a session is open but idle", which the process
+            // scan can never do.
+            return hooks.any_busy() || hooks.within_grace();
+        }
+        drop(hooks);
+        self.proc_active.load(Ordering::Relaxed)
+    }
+
+    /// True when a Claude Code session exists at all, busy or not. Drives the UI
+    /// hint rather than the power decision.
+    pub fn session_present(&self) -> bool {
         if self.proc_active.load(Ordering::Relaxed) {
             return true;
         }
         let hooks = self.hooks.lock().unwrap();
-        !hooks.sessions.is_empty() && hooks.last_seen.is_some_and(|t| t.elapsed() < HOOK_TTL)
+        let present = hooks.live_sessions().next().is_some();
+        present
+    }
+
+    /// True when a turn is actually in flight.
+    pub fn busy(&self) -> bool {
+        self.hooks.lock().unwrap().any_busy()
+    }
+
+    /// Whether hook events are driving the decision, as opposed to the coarse
+    /// process scan. Surfaced in the settings panel so the difference is visible.
+    pub fn precise(&self) -> bool {
+        self.hooks.lock().unwrap().ever_reported
     }
 
     fn serve(self: Arc<Self>) {
@@ -114,17 +163,72 @@ impl Detector {
             .to_string();
 
         let mut hooks = self.hooks.lock().unwrap();
-        match event.as_str() {
+        hooks.apply(&event, session);
+    }
+}
+
+impl HookState {
+    /// `UserPromptSubmit` opens a turn and `Stop` closes it — between them the
+    /// agent is thinking or running tools, which is exactly the window worth
+    /// staying awake for.
+    fn apply(&mut self, event: &str, session: String) {
+        self.ever_reported = true;
+        let now = Instant::now();
+
+        match event {
             "SessionEnd" => {
-                hooks.sessions.remove(&session);
+                if self.sessions.remove(&session).is_some_and(|s| s.busy) {
+                    // A session killed mid-turn still ends the busy period.
+                    self.note_idle(now);
+                }
+                return;
             }
-            // Anything else that arrives is evidence the session is alive; treating
-            // unknown events as keepalives means new hook types cannot break this.
-            _ => {
-                hooks.sessions.insert(session);
+            "Stop" | "SubagentStop" => {
+                if let Some(state) = self.sessions.get_mut(&session) {
+                    state.busy = false;
+                    state.last_event = now;
+                }
+                self.note_idle(now);
+                return;
             }
+            _ => {}
         }
-        hooks.last_seen = Some(Instant::now());
+
+        // SessionStart registers an idle session. Anything else that arrives —
+        // UserPromptSubmit, or a hook type that did not exist when this was
+        // written — is evidence of work in flight, so it opens a turn. Erring
+        // toward busy on an unknown event keeps a future Claude Code release from
+        // silently letting the machine sleep mid-task.
+        let busy = event != "SessionStart";
+        self.sessions.insert(
+            session,
+            SessionState {
+                busy,
+                last_event: now,
+            },
+        );
+    }
+
+    fn note_idle(&mut self, now: Instant) {
+        if !self.any_busy() {
+            self.last_busy_end = Some(now);
+        }
+    }
+
+    /// Sessions that have reported within the TTL. A session whose process died
+    /// without firing `SessionEnd` ages out here rather than pinning the machine.
+    fn live_sessions(&self) -> impl Iterator<Item = &SessionState> {
+        self.sessions
+            .values()
+            .filter(|s| s.last_event.elapsed() < HOOK_TTL)
+    }
+
+    fn any_busy(&self) -> bool {
+        self.live_sessions().any(|s| s.busy)
+    }
+
+    fn within_grace(&self) -> bool {
+        self.last_busy_end.is_some_and(|t| t.elapsed() < IDLE_GRACE)
     }
 }
 
@@ -286,5 +390,66 @@ mod tests {
     fn equal_tokens_match() {
         assert!(constant_time_eq(b"deadbeef", b"deadbeef"));
         assert!(!constant_time_eq(b"deadbeef", b"deadbeee"));
+    }
+
+    fn state() -> HookState {
+        HookState::default()
+    }
+
+    #[test]
+    fn a_session_at_an_idle_prompt_is_not_worth_staying_awake_for() {
+        let mut h = state();
+        h.apply("SessionStart", "a".into());
+        assert!(!h.any_busy(), "an open prompt is not work");
+        assert!(!h.within_grace(), "nothing has run yet");
+    }
+
+    #[test]
+    fn a_turn_brackets_the_busy_window() {
+        let mut h = state();
+        h.apply("SessionStart", "a".into());
+        h.apply("UserPromptSubmit", "a".into());
+        assert!(h.any_busy());
+        h.apply("Stop", "a".into());
+        assert!(!h.any_busy());
+        // Still inside the linger, so protection has not dropped yet.
+        assert!(h.within_grace());
+    }
+
+    #[test]
+    fn one_busy_session_keeps_the_machine_up() {
+        let mut h = state();
+        h.apply("UserPromptSubmit", "a".into());
+        h.apply("UserPromptSubmit", "b".into());
+        h.apply("Stop", "a".into());
+        assert!(h.any_busy(), "b is still working");
+    }
+
+    #[test]
+    fn a_session_killed_mid_turn_stops_counting() {
+        let mut h = state();
+        h.apply("UserPromptSubmit", "a".into());
+        h.apply("SessionEnd", "a".into());
+        assert!(!h.any_busy());
+    }
+
+    /// A hook type that does not exist yet must not be read as "idle" — failing
+    /// toward staying awake is the safe direction.
+    #[test]
+    fn unknown_events_are_treated_as_work() {
+        let mut h = state();
+        h.apply("SomeFutureHook", "a".into());
+        assert!(h.any_busy());
+    }
+
+    #[test]
+    fn hooks_only_become_authoritative_once_they_speak() {
+        let mut h = state();
+        assert!(
+            !h.ever_reported,
+            "process scan decides until a hook arrives"
+        );
+        h.apply("SessionStart", "a".into());
+        assert!(h.ever_reported);
     }
 }

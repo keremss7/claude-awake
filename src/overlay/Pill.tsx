@@ -122,7 +122,13 @@ export function Pill() {
                   ? "waiting for Claude"
                   : "no protection"}
               {s.claudeActive && (
-                <span className="text-ember-400/80"> · claude running</span>
+                <span className="text-ember-400/80">
+                  {s.preciseDetection
+                    ? s.claudeBusy
+                      ? " · claude working"
+                      : " · claude idle"
+                    : " · claude running"}
+                </span>
               )}
             </div>
           </div>

@@ -16,7 +16,7 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
   {
     id: "auto",
     label: "Auto",
-    hint: "Protection engages while Claude Code is running and lifts when it stops.",
+    hint: "Protection follows Claude Code.",
   },
   {
     id: "always",
@@ -42,6 +42,12 @@ export function Panel() {
   }, []);
 
   const activeMode = MODES.find((m) => m.id === s.mode)!;
+
+  // What Auto mode can actually see decides how it behaves, so say which it is
+  // rather than making the user guess why the machine stayed awake all night.
+  const autoHint = s.preciseDetection
+    ? "Hooks are reporting, so protection tracks real work: it engages when a turn starts and lifts about a minute after the agent finishes."
+    : "Without hooks the app can only see that Claude is running, not whether it is working — so an idle session keeps the machine awake. Run scripts/install-hooks.sh to fix that.";
 
   return (
     <div className="h-full bg-clay-50 text-ink-900 dark:bg-ink-900 dark:text-clay-50 flex flex-col">
@@ -95,7 +101,9 @@ export function Panel() {
               <div className="text-[11.5px] text-ink-900/45 dark:text-clay-50/40 mt-0.5 tabular-nums">
                 {s.protecting
                   ? `for ${formatDuration(s.awakeSecs)}`
-                  : activeMode.hint}
+                  : s.mode === "auto" && s.claudeActive
+                    ? "Claude is idle — nothing to stay awake for"
+                    : activeMode.hint}
               </div>
             </div>
           </div>
@@ -155,6 +163,7 @@ export function Panel() {
           </div>
           <p className="text-[11px] leading-relaxed text-ink-900/40 dark:text-clay-50/35 mt-2">
             {activeMode.hint}
+            {s.mode === "auto" && ` ${autoHint}`}
           </p>
         </section>
 
@@ -174,6 +183,41 @@ export function Panel() {
               on={s.autostart}
               onChange={(v) => api.setAutostart(v).then(setS).catch(() => {})}
             />
+          </div>
+        </section>
+
+        {/* ── detection ─────────────────────────────────────────────────── */}
+        <section>
+          <Label>Detection</Label>
+          <div
+            className={[
+              "rounded-xl border px-3 py-2.5",
+              s.preciseDetection
+                ? "border-black/8 dark:border-white/8"
+                : "border-ember-500/30 bg-ember-500/8",
+            ].join(" ")}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={[
+                  "w-1.5 h-1.5 rounded-full shrink-0",
+                  s.preciseDetection ? "bg-emerald-500" : "bg-ember-500",
+                ].join(" ")}
+              />
+              <span className="text-[12px] font-medium">
+                {s.preciseDetection ? "Hook-driven (precise)" : "Process scan (coarse)"}
+              </span>
+            </div>
+            <p className="text-[10.5px] leading-relaxed text-ink-900/45 dark:text-clay-50/40 mt-1.5">
+              {s.preciseDetection
+                ? "Claude Code reports the start and end of every turn, so protection lifts as soon as the agent stops working."
+                : "An open-but-idle session cannot be told apart from a working one, so Auto mode keeps the machine awake for both."}
+            </p>
+            {!s.preciseDetection && (
+              <code className="block mt-2 text-[10px] rounded-lg bg-black/[0.05] dark:bg-white/[0.06] px-2 py-1.5 select-text">
+                bash scripts/install-hooks.sh
+              </code>
+            )}
           </div>
         </section>
 

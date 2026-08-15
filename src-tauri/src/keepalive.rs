@@ -51,8 +51,13 @@ mod imp {
             if !on {
                 return;
             }
-            // -i idle, -m disk, -s system, -u user-active; -d also holds display.
-            let flags = if keep_display { "-dimsu" } else { "-imsu" };
+            // -i idle system sleep, -m disk sleep, -s system sleep on AC.
+            //
+            // Deliberately no -u: the man page is explicit that it "turns the
+            // display on and prevents the display from going into idle sleep",
+            // which is the exact opposite of what an unchecked "keep the display
+            // on" means. -d is the honest way to ask for that.
+            let flags = if keep_display { "-dims" } else { "-ims" };
             // -w ties the child's lifetime to ours. Drop only runs on a graceful
             // exit; without this, a SIGKILL or a crash would orphan caffeinate and
             // leave the machine unable to sleep with nothing left to stop it.

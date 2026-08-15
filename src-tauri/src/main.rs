@@ -25,6 +25,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 use claude_awake_lib::detect::Detector;
 use claude_awake_lib::keepalive::SessionKeepalive;
+use claude_awake_lib::lidwatch::LidWatcher;
 use claude_awake_lib::protocol::{Guards, Profile, Request};
 use claude_awake_lib::{ipc, tracker};
 
@@ -75,7 +76,12 @@ struct Settings {
 struct Snapshot {
     mode: Mode,
     protecting: bool,
+    /// A Claude Code session exists, busy or not.
     claude_active: bool,
+    /// A turn is actually in flight. Only meaningful when `precise_detection`.
+    claude_busy: bool,
+    /// Hook events are driving Auto mode, rather than the coarse process scan.
+    precise_detection: bool,
     helper: HelperStatus,
     helper_detail: String,
     guards: Guards,
@@ -104,6 +110,7 @@ struct Shared {
     core: Mutex<Core>,
     detector: Arc<Detector>,
     keepalive: SessionKeepalive,
+    lid: LidWatcher,
     /// Reported by the overlay webview. Stored in tenths of a point so it fits an
     /// atomic and needs no lock on the hot tracking path.
     overlay_height_tenths: AtomicU32,
@@ -118,7 +125,9 @@ impl Shared {
         Snapshot {
             mode: core.settings.mode,
             protecting: core.protecting,
-            claude_active: self.detector.active(),
+            claude_active: self.detector.session_present(),
+            claude_busy: self.detector.busy(),
+            precise_detection: self.detector.precise(),
             helper: core.helper,
             helper_detail: core.helper_detail.clone(),
             guards: core.guards,
@@ -170,6 +179,9 @@ fn reconcile(app: &AppHandle, shared: &Shared) {
     // Session-level assertions first: they need no privilege, so even a machine
     // without the helper gets idle-sleep protection immediately.
     shared.keepalive.set(want, keep_display);
+    // With clamshell sleep suppressed, nothing else will darken the panel when
+    // the lid shuts.
+    shared.lid.set_armed(want && !keep_display);
 
     let request = if want {
         Request::Apply(Profile { keep_display })
@@ -647,6 +659,7 @@ fn main() {
                 }),
                 detector: Detector::start(),
                 keepalive: SessionKeepalive::new(),
+                lid: LidWatcher::start(),
                 overlay_height_tenths: AtomicU32::new((OVERLAY_H_INITIAL * 10.0) as u32),
                 last_tooltip: Mutex::new(String::new()),
             });
