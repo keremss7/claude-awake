@@ -44,6 +44,9 @@ const MAX_BODY: usize = 64 * 1024;
 
 pub struct Detector {
     proc_active: AtomicBool,
+    /// Working directory of every running `claude`, refreshed by the poll thread.
+    /// This is what makes the session list complete rather than hook-shaped.
+    processes: Mutex<Vec<String>>,
     hooks: Mutex<HookState>,
 }
 
@@ -56,34 +59,28 @@ struct HookState {
     /// Set once any hook arrives. Until then the process scan is authoritative,
     /// because "no busy sessions" and "hooks are not installed" look identical.
     ever_reported: bool,
+    /// Session ids the user has excluded from the awake decision.
+    ignored: std::collections::HashSet<String>,
 }
 
 /// One row in the settings panel's session list.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
+    /// Claude Code session id.
     pub id: String,
-    /// Human-readable: the working directory's basename, or a short id.
+    /// Working directory basename, suffixed with a short id when two collide.
     pub label: String,
     pub busy: bool,
     pub ignored: bool,
     pub idle_secs: u64,
+    /// Reserved for future grouping; always 1 today.
+    pub instances: u32,
 }
 
-impl SessionState {
-    /// Whether this session should hold the machine awake.
-    fn counts(&self) -> bool {
-        self.busy && !self.ignored
-    }
-
-    fn label(&self, id: &str) -> String {
-        self.cwd
-            .as_deref()
-            .and_then(|p| p.rsplit(['/', '\\']).next())
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| id.chars().take(8).collect())
-    }
+/// First segment of a session UUID — enough to tell two rows apart by eye.
+fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
 }
 
 #[derive(Clone)]
@@ -93,23 +90,30 @@ struct SessionState {
     /// Working directory from the hook payload. A UUID is useless in a list of
     /// four sessions; "monorepo" tells you which one is holding the machine up.
     cwd: Option<String>,
-    /// Excluded from the awake decision by the user. A background session that
-    /// churns all day should not be able to pin the laptop on its own.
-    ignored: bool,
+}
+
+/// Basename of a path, for display.
+fn basename(path: &str) -> String {
+    path.rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(path)
+        .to_string()
 }
 
 impl Detector {
     pub fn start() -> Arc<Detector> {
         let detector = Arc::new(Detector {
             proc_active: AtomicBool::new(false),
+            processes: Mutex::new(Vec::new()),
             hooks: Mutex::new(HookState::default()),
         });
 
         {
             let d = Arc::clone(&detector);
             std::thread::spawn(move || loop {
-                d.proc_active
-                    .store(claude_process_running(), Ordering::Relaxed);
+                let cwds = claude_working_dirs();
+                d.proc_active.store(!cwds.is_empty(), Ordering::Relaxed);
+                *d.processes.lock().unwrap() = cwds;
                 std::thread::sleep(POLL_INTERVAL);
             });
         }
@@ -155,32 +159,68 @@ impl Detector {
         self.hooks.lock().unwrap().ever_reported
     }
 
-    /// Every live session, newest activity first. The awake decision is
-    /// machine-wide — one busy session keeps everything up — so listing them is
-    /// what makes "why is this still awake" answerable at a glance.
+    /// Every live session, busiest first.
+    ///
+    /// Sessions announce themselves through hooks, so a session that has not run
+    /// anything since this app started is not here yet — it appears the moment it
+    /// does. `process_count` exposes the gap rather than letting it look like a
+    /// missing session. Keying by session id rather than directory matters: most
+    /// people run several sessions from the same place, and merging them by
+    /// directory would collapse the list back to one row.
     pub fn sessions(&self) -> Vec<SessionInfo> {
         let hooks = self.hooks.lock().unwrap();
+
         let mut list: Vec<SessionInfo> = hooks
             .sessions
             .iter()
             .filter(|(_, s)| s.last_event.elapsed() < HOOK_TTL)
-            .map(|(id, s)| SessionInfo {
+            .map(|(id, state)| SessionInfo {
                 id: id.clone(),
-                label: s.label(id),
-                busy: s.busy && s.last_event.elapsed() < ACTIVITY_TTL,
-                ignored: s.ignored,
-                idle_secs: s.last_event.elapsed().as_secs(),
+                label: state
+                    .cwd
+                    .as_deref()
+                    .map(basename)
+                    .unwrap_or_else(|| short_id(id)),
+                busy: state.busy && state.last_event.elapsed() < ACTIVITY_TTL,
+                ignored: hooks.ignored.contains(id),
+                idle_secs: state.last_event.elapsed().as_secs(),
+                instances: 1,
             })
             .collect();
-        list.sort_by_key(|s| s.idle_secs);
+
+        // Several sessions in one directory would otherwise be four rows all
+        // reading "keremseven". Only disambiguate the ones that actually collide,
+        // so the common case stays clean.
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for row in &list {
+            *seen.entry(row.label.clone()).or_default() += 1;
+        }
+        for row in &mut list {
+            if seen.get(&row.label).copied().unwrap_or(0) > 1 {
+                row.label = format!("{} · {}", row.label, short_id(&row.id));
+            }
+        }
+
+        // Working first, then most recently active.
+        list.sort_by_key(|s| (!s.busy, s.idle_secs, s.label.clone()));
         list
     }
 
+    /// How many `claude` processes are running. Compared against the session list
+    /// in the panel: a session that has not run anything since this app started
+    /// has never announced itself, and the difference should be visible rather
+    /// than look like a missing session.
+    pub fn process_count(&self) -> usize {
+        self.processes.lock().unwrap().len()
+    }
+
     /// Excludes a session from the awake decision, or puts it back.
-    pub fn set_session_ignored(&self, id: &str, ignored: bool) {
+    pub fn set_session_ignored(&self, key: &str, ignored: bool) {
         let mut hooks = self.hooks.lock().unwrap();
-        if let Some(state) = hooks.sessions.get_mut(id) {
-            state.ignored = ignored;
+        if ignored {
+            hooks.ignored.insert(key.to_string());
+        } else {
+            hooks.ignored.remove(key);
         }
     }
 
@@ -244,9 +284,9 @@ impl Detector {
             .map(|(id, state)| {
                 serde_json::json!({
                     "session": id,
-                    "label": state.label(id),
+                    "label": state.cwd.as_deref().map(basename).unwrap_or_default(),
                     "busy": state.busy,
-                    "ignored": state.ignored,
+                    "ignored": hooks.ignored.contains(id),
                     "secsSinceEvent": state.last_event.elapsed().as_secs(),
                     "claimFresh": state.last_event.elapsed() < ACTIVITY_TTL,
                 })
@@ -329,7 +369,6 @@ impl HookState {
             busy,
             last_event: now,
             cwd: cwd.clone(),
-            ignored: false,
         });
         entry.busy = busy;
         entry.last_event = now;
@@ -355,9 +394,9 @@ impl HookState {
     /// A session counts as busy only while its claim is fresh. Without the age
     /// check a single missed `Stop` would hold the machine up indefinitely.
     fn any_busy(&self) -> bool {
-        self.sessions
-            .values()
-            .any(|s| s.counts() && s.last_event.elapsed() < ACTIVITY_TTL)
+        self.sessions.iter().any(|(id, s)| {
+            s.busy && s.last_event.elapsed() < ACTIVITY_TTL && !self.ignored.contains(id)
+        })
     }
 
     fn within_grace(&self) -> bool {
@@ -491,22 +530,55 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Working directory of every running `claude`, one entry per process.
+///
+/// The directory is what makes a session identifiable and, crucially, visible
+/// before it has fired any hook — which is every session that was already open
+/// when this app started.
 #[cfg(unix)]
-fn claude_process_running() -> bool {
+fn claude_working_dirs() -> Vec<String> {
     // `-x` is an exact match on the executable name, so this cannot be fooled by
     // an editor that happens to have "claude" in a file path.
-    std::process::Command::new("/usr/bin/pgrep")
+    let Ok(out) = std::process::Command::new("/usr/bin/pgrep")
         .args(["-x", "claude"])
         .output()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false)
+    else {
+        return Vec::new();
+    };
+    let pids: Vec<&str> = std::str::from_utf8(&out.stdout)
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect();
+    if pids.is_empty() {
+        return Vec::new();
+    }
+
+    // One lsof call for all of them: per-pid calls would be a process spawn each,
+    // every poll. `-Fpn` gives machine-readable `p<pid>` / `n<path>` records.
+    let Ok(out) = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-p", &pids.join(","), "-a", "-d", "cwd", "-Fn"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    std::str::from_utf8(&out.stdout)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix('n'))
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
+/// Windows has no cheap equivalent — a process's working directory lives in its
+/// PEB and reading it means opening the process and following pointers. So the
+/// session list there is hook-only, and a session that has not fired one yet
+/// simply does not appear. The awake decision itself is unaffected.
 #[cfg(windows)]
-fn claude_process_running() -> bool {
+fn claude_working_dirs() -> Vec<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    std::process::Command::new("tasklist.exe")
+    let running = std::process::Command::new("tasklist.exe")
         .args(["/FI", "IMAGENAME eq claude.exe", "/NH"])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -515,7 +587,13 @@ fn claude_process_running() -> bool {
                 .to_lowercase()
                 .contains("claude.exe")
         })
-        .unwrap_or(false)
+        .unwrap_or(false);
+    // A single anonymous entry: enough for "is Claude running", no directory.
+    if running {
+        vec![String::new()]
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

@@ -138,10 +138,15 @@ working session keeps everything awake.** Switching terminal windows never chang
 refactor is running in one window, moving to an idle session in another does not drop
 protection, and the pill keeps reporting the machine-wide state wherever it is pinned.
 
-The panel lists every live session by working directory, marks which are working, and lets you
+The panel lists the sessions it knows about — labelled by working directory, disambiguated by
+a short id when several run from the same place — marks which are working, and lets you
 **ignore** one so it stops counting. That is the only per-session control that means anything:
 a per-session "always on" would be indistinguishable from the global one, since a single
 session holding the machine up already holds up all of them.
+
+Sessions announce themselves through hooks, so one that has not run anything since the app
+started is not listed until it does. The panel says how many of those there are rather than
+quietly showing a short list.
 
 ## How it works
 

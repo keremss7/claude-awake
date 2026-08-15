@@ -23,6 +23,8 @@ export interface SessionInfo {
   /** Excluded from the awake decision. */
   ignored: boolean;
   idleSecs: number;
+  /** How many `claude` processes share this directory. */
+  instances: number;
 }
 
 export interface Snapshot {
@@ -35,8 +37,10 @@ export interface Snapshot {
   claudeBusy: boolean;
   /** Hook events drive Auto mode, rather than the coarse process scan. */
   preciseDetection: boolean;
-  /** Every live Claude Code session. */
+  /** Every live Claude Code session that has reported at least once. */
   sessions: SessionInfo[];
+  /** Running `claude` processes; may exceed `sessions.length`. */
+  processCount: number;
   helper: HelperStatus;
   helperDetail: string;
   guards: Guards;
@@ -55,6 +59,7 @@ export const EMPTY: Snapshot = {
   claudeBusy: false,
   preciseDetection: false,
   sessions: [],
+  processCount: 0,
   helper: "missing",
   helperDetail: "",
   guards: { lid: false, battery: false, wifi: false, display: false },
@@ -87,11 +92,12 @@ function mockSnapshot(): Snapshot {
     preciseDetection: flag("precise"),
     sessions: q.has("sessions")
       ? [
-          { id: "s1", label: "monorepo", busy: true, ignored: false, idleSecs: 0 },
-          { id: "s2", label: "docs-site", busy: false, ignored: false, idleSecs: 412 },
-          { id: "s3", label: "log-tailer", busy: true, ignored: true, idleSecs: 3 },
+          { id: "s1", label: "monorepo", busy: true, ignored: false, idleSecs: 0, instances: 1 },
+          { id: "s2", label: "docs-site", busy: false, ignored: false, idleSecs: 412, instances: 2 },
+          { id: "s3", label: "log-tailer", busy: true, ignored: true, idleSecs: 3, instances: 1 },
         ]
       : [],
+    processCount: Number(q.get("procs") ?? (q.has("sessions") ? 4 : 0)),
     helper: (q.get("helper") as HelperStatus) ?? (protecting ? "ok" : "missing"),
     helperDetail: q.get("detail") ?? "",
     guards: {

@@ -85,6 +85,9 @@ struct Snapshot {
     /// Every live Claude Code session. The awake decision is machine-wide, so
     /// this is what makes "which one is holding it up" answerable.
     sessions: Vec<SessionInfo>,
+    /// Running `claude` processes. Larger than `sessions` when some have not
+    /// reported yet; the panel says so rather than hiding the difference.
+    process_count: usize,
     helper: HelperStatus,
     helper_detail: String,
     guards: Guards,
@@ -132,6 +135,7 @@ impl Shared {
             claude_busy: self.detector.busy(),
             precise_detection: self.detector.precise(),
             sessions: self.detector.sessions(),
+            process_count: self.detector.process_count(),
             helper: core.helper,
             helper_detail: core.helper_detail.clone(),
             guards: core.guards,

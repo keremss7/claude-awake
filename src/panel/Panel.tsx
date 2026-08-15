@@ -214,6 +214,11 @@ export function Panel() {
                       ].join(" ")}
                     >
                       {session.label}
+                      {session.instances > 1 && (
+                        <span className="ml-1.5 text-[10px] font-normal text-ink-900/35 dark:text-clay-50/30 tabular-nums">
+                          ×{session.instances}
+                        </span>
+                      )}
                     </div>
                     <div className="text-[10px] text-ink-900/40 dark:text-clay-50/35 tabular-nums">
                       {session.ignored
@@ -241,6 +246,16 @@ export function Panel() {
               Any one working session keeps the whole machine awake — sleep belongs
               to the machine, not to a conversation, so switching windows never
               changes it. Ignore a session to stop it counting.
+              {s.processCount > s.sessions.length && (
+                <>
+                  {" "}
+                  {s.processCount - s.sessions.length} more Claude
+                  {s.processCount - s.sessions.length === 1 ? " is" : " are"}{" "}
+                  running but {s.processCount - s.sessions.length === 1 ? "has" : "have"}{" "}
+                  not done anything since this app started, so {s.processCount - s.sessions.length === 1 ? "it is" : "they are"}{" "}
+                  not listed yet.
+                </>
+              )}
             </p>
           </section>
         )}
