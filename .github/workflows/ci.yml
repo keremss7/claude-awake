@@ -19,10 +19,10 @@ jobs:
     name: frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - name: Type-check
@@ -38,7 +38,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -50,9 +50,9 @@ jobs:
 
       # tauri-build reads the frontend dist directory, so it has to exist before
       # anything in src-tauri is compiled.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -84,10 +84,10 @@ jobs:
             target: ""
             prepare: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - name: Add macOS targets
@@ -101,7 +101,7 @@ jobs:
         run: node scripts/prepare-helper.mjs ${{ matrix.prepare }}
       - name: Bundle
         run: npx tauri build ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: claude-awake-${{ matrix.os }}
           path: |
