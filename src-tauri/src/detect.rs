@@ -222,15 +222,21 @@ fn write_private(path: &std::path::Path, contents: &str) {
             return;
         }
     }
-    if std::fs::write(path, contents).is_err() {
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    if std::fs::write(path, contents).is_ok() {
+        restrict_permissions(path);
     }
 }
+
+#[cfg(unix)]
+fn restrict_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+
+/// On Windows the file inherits the ACL of `%USERPROFILE%\.claude-awake`, which
+/// already excludes other users, so there is nothing to tighten.
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &std::path::Path) {}
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.is_empty() || b.is_empty() || a.len() != b.len() {

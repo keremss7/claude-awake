@@ -64,11 +64,13 @@ a Windows machine for this:
 
 ```bash
 rustup target add x86_64-pc-windows-msvc
-cargo check --manifest-path src-tauri/Cargo.toml --lib --target x86_64-pc-windows-msvc
+cargo clippy --manifest-path src-tauri/Cargo.toml --lib --target x86_64-pc-windows-msvc -- -D warnings
 ```
 
 (The `--lib` matters: the binary needs `llvm-rc` to build Windows resources, the library does
-not, and all the platform-specific code lives in the library.)
+not, and all the platform-specific code lives in the library. Running clippy rather than just
+`check` is worth it — a couple of lints only fire on the platform whose `cfg` branch is
+active.)
 
 ## House rules for the privileged helper
 

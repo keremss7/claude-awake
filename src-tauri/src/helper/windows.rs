@@ -248,7 +248,7 @@ unsafe impl Send for Pipe {}
 impl Pipe {
     fn accept(first_instance: bool) -> std::io::Result<Pipe> {
         let descriptor = SecurityDescriptor::build()?;
-        let mut attributes = SECURITY_ATTRIBUTES {
+        let attributes = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor.0 .0,
             bInheritHandle: false.into(),
@@ -268,7 +268,7 @@ impl Pipe {
                 PIPE_BUFFER,
                 PIPE_BUFFER,
                 0,
-                Some(&mut attributes),
+                Some(&attributes),
             )
         };
         if handle == INVALID_HANDLE_VALUE {
