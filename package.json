@@ -26,10 +26,10 @@
     "@tailwindcss/vite": "^4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.0.5",
     "tailwindcss": "^4",
-    "typescript": "^5.7.2",
-    "vite": "^6.0.7"
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
   },
   "description": "Keeps your machine awake while Claude Code is working \u2014 lid closed, battery ignored, Wi-Fi up.",
   "license": "MIT",
