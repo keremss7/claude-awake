@@ -101,7 +101,7 @@ jobs:
         run: node scripts/prepare-helper.mjs ${{ matrix.prepare }}
       - name: Bundle
         run: npx tauri build ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: claude-awake-${{ matrix.os }}
           path: |
