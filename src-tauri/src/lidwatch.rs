@@ -11,10 +11,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 /// Lid state is cheap to read but not free — it shells out to `ioreg`. Two
 /// seconds is well inside the window where a lit panel matters.
+#[cfg(target_os = "macos")]
 const POLL: Duration = Duration::from_secs(2);
 
 pub struct LidWatcher {
