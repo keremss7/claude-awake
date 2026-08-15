@@ -58,10 +58,44 @@ struct HookState {
     ever_reported: bool,
 }
 
-#[derive(Clone, Copy)]
+/// One row in the settings panel's session list.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionInfo {
+    pub id: String,
+    /// Human-readable: the working directory's basename, or a short id.
+    pub label: String,
+    pub busy: bool,
+    pub ignored: bool,
+    pub idle_secs: u64,
+}
+
+impl SessionState {
+    /// Whether this session should hold the machine awake.
+    fn counts(&self) -> bool {
+        self.busy && !self.ignored
+    }
+
+    fn label(&self, id: &str) -> String {
+        self.cwd
+            .as_deref()
+            .and_then(|p| p.rsplit(['/', '\\']).next())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| id.chars().take(8).collect())
+    }
+}
+
+#[derive(Clone)]
 struct SessionState {
     busy: bool,
     last_event: Instant,
+    /// Working directory from the hook payload. A UUID is useless in a list of
+    /// four sessions; "monorepo" tells you which one is holding the machine up.
+    cwd: Option<String>,
+    /// Excluded from the awake decision by the user. A background session that
+    /// churns all day should not be able to pin the laptop on its own.
+    ignored: bool,
 }
 
 impl Detector {
@@ -121,6 +155,35 @@ impl Detector {
         self.hooks.lock().unwrap().ever_reported
     }
 
+    /// Every live session, newest activity first. The awake decision is
+    /// machine-wide — one busy session keeps everything up — so listing them is
+    /// what makes "why is this still awake" answerable at a glance.
+    pub fn sessions(&self) -> Vec<SessionInfo> {
+        let hooks = self.hooks.lock().unwrap();
+        let mut list: Vec<SessionInfo> = hooks
+            .sessions
+            .iter()
+            .filter(|(_, s)| s.last_event.elapsed() < HOOK_TTL)
+            .map(|(id, s)| SessionInfo {
+                id: id.clone(),
+                label: s.label(id),
+                busy: s.busy && s.last_event.elapsed() < ACTIVITY_TTL,
+                ignored: s.ignored,
+                idle_secs: s.last_event.elapsed().as_secs(),
+            })
+            .collect();
+        list.sort_by_key(|s| s.idle_secs);
+        list
+    }
+
+    /// Excludes a session from the awake decision, or puts it back.
+    pub fn set_session_ignored(&self, id: &str, ignored: bool) {
+        let mut hooks = self.hooks.lock().unwrap();
+        if let Some(state) = hooks.sessions.get_mut(id) {
+            state.ignored = ignored;
+        }
+    }
+
     fn serve(self: Arc<Self>) {
         let Some(listener) = bind_loopback() else {
             eprintln!("[claude-awake] hook listener could not bind; process scan only");
@@ -169,8 +232,10 @@ impl Detector {
     /// think Claude was idle" is otherwise unanswerable after the fact — the whole
     /// decision lives in memory. Token-gated like everything else on this port.
     ///
-    ///     curl -sS -H "X-Claude-Awake: $(cat ~/.claude-awake/token)" \
-    ///          -X POST --data diagnose "http://127.0.0.1:$(cat ~/.claude-awake/port)/state"
+    /// ```text
+    /// curl -sS -H "X-Claude-Awake: $(cat ~/.claude-awake/token)" \
+    ///      -X POST --data diagnose "http://127.0.0.1:$(cat ~/.claude-awake/port)/state"
+    /// ```
     fn describe(&self) -> String {
         let hooks = self.hooks.lock().unwrap();
         let sessions: Vec<serde_json::Value> = hooks
@@ -179,7 +244,9 @@ impl Detector {
             .map(|(id, state)| {
                 serde_json::json!({
                     "session": id,
+                    "label": state.label(id),
                     "busy": state.busy,
+                    "ignored": state.ignored,
                     "secsSinceEvent": state.last_event.elapsed().as_secs(),
                     "claimFresh": state.last_event.elapsed() < ACTIVITY_TTL,
                 })
@@ -211,9 +278,13 @@ impl Detector {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
+        let cwd = json
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let mut hooks = self.hooks.lock().unwrap();
-        hooks.apply(&event, session);
+        hooks.apply(&event, session, cwd);
     }
 }
 
@@ -221,7 +292,7 @@ impl HookState {
     /// `UserPromptSubmit` opens a turn and `Stop` closes it — between them the
     /// agent is thinking or running tools, which is exactly the window worth
     /// staying awake for.
-    fn apply(&mut self, event: &str, session: String) {
+    fn apply(&mut self, event: &str, session: String, cwd: Option<String>) {
         self.ever_reported = true;
         let now = Instant::now();
 
@@ -254,13 +325,17 @@ impl HookState {
         // toward busy on an unknown event keeps a future Claude Code release from
         // silently letting the machine sleep mid-task.
         let busy = event != "SessionStart";
-        self.sessions.insert(
-            session,
-            SessionState {
-                busy,
-                last_event: now,
-            },
-        );
+        let entry = self.sessions.entry(session).or_insert(SessionState {
+            busy,
+            last_event: now,
+            cwd: cwd.clone(),
+            ignored: false,
+        });
+        entry.busy = busy;
+        entry.last_event = now;
+        if cwd.is_some() {
+            entry.cwd = cwd;
+        }
     }
 
     fn note_idle(&mut self, now: Instant) {
@@ -282,7 +357,7 @@ impl HookState {
     fn any_busy(&self) -> bool {
         self.sessions
             .values()
-            .any(|s| s.busy && s.last_event.elapsed() < ACTIVITY_TTL)
+            .any(|s| s.counts() && s.last_event.elapsed() < ACTIVITY_TTL)
     }
 
     fn within_grace(&self) -> bool {
@@ -463,10 +538,15 @@ mod tests {
         HookState::default()
     }
 
+    /// Test shorthand; the cwd only matters for the display label.
+    fn send(h: &mut HookState, event: &str, session: &str) {
+        h.apply(event, session.to_string(), None);
+    }
+
     #[test]
     fn a_session_at_an_idle_prompt_is_not_worth_staying_awake_for() {
         let mut h = state();
-        h.apply("SessionStart", "a".into());
+        send(&mut h, "SessionStart", "a");
         assert!(!h.any_busy(), "an open prompt is not work");
         assert!(!h.within_grace(), "nothing has run yet");
     }
@@ -474,10 +554,10 @@ mod tests {
     #[test]
     fn a_turn_brackets_the_busy_window() {
         let mut h = state();
-        h.apply("SessionStart", "a".into());
-        h.apply("UserPromptSubmit", "a".into());
+        send(&mut h, "SessionStart", "a");
+        send(&mut h, "UserPromptSubmit", "a");
         assert!(h.any_busy());
-        h.apply("Stop", "a".into());
+        send(&mut h, "Stop", "a");
         assert!(!h.any_busy());
         // Still inside the linger, so protection has not dropped yet.
         assert!(h.within_grace());
@@ -486,9 +566,9 @@ mod tests {
     #[test]
     fn one_busy_session_keeps_the_machine_up() {
         let mut h = state();
-        h.apply("UserPromptSubmit", "a".into());
-        h.apply("UserPromptSubmit", "b".into());
-        h.apply("Stop", "a".into());
+        send(&mut h, "UserPromptSubmit", "a");
+        send(&mut h, "UserPromptSubmit", "b");
+        send(&mut h, "Stop", "a");
         assert!(h.any_busy(), "b is still working");
     }
 
@@ -498,12 +578,12 @@ mod tests {
     #[test]
     fn tool_activity_renews_a_long_running_turn() {
         let mut h = state();
-        h.apply("UserPromptSubmit", "a".into());
+        send(&mut h, "UserPromptSubmit", "a");
         // Simulate the claim going stale, as it would during a multi-hour job.
         h.sessions.get_mut("a").unwrap().last_event = Instant::now() - ACTIVITY_TTL * 2;
         assert!(!h.any_busy(), "a stale claim must not hold the machine up");
 
-        h.apply("PostToolUse", "a".into());
+        send(&mut h, "PostToolUse", "a");
         assert!(h.any_busy(), "a tool call proves the turn is still alive");
     }
 
@@ -512,8 +592,8 @@ mod tests {
     #[test]
     fn subagent_stop_does_not_end_the_turn() {
         let mut h = state();
-        h.apply("UserPromptSubmit", "a".into());
-        h.apply("SubagentStop", "a".into());
+        send(&mut h, "UserPromptSubmit", "a");
+        send(&mut h, "SubagentStop", "a");
         assert!(h.any_busy());
     }
 
@@ -521,7 +601,7 @@ mod tests {
     #[test]
     fn a_missed_stop_heals_itself() {
         let mut h = state();
-        h.apply("UserPromptSubmit", "a".into());
+        send(&mut h, "UserPromptSubmit", "a");
         h.sessions.get_mut("a").unwrap().last_event = Instant::now() - ACTIVITY_TTL * 2;
         assert!(!h.any_busy());
     }
@@ -529,8 +609,8 @@ mod tests {
     #[test]
     fn a_session_killed_mid_turn_stops_counting() {
         let mut h = state();
-        h.apply("UserPromptSubmit", "a".into());
-        h.apply("SessionEnd", "a".into());
+        send(&mut h, "UserPromptSubmit", "a");
+        send(&mut h, "SessionEnd", "a");
         assert!(!h.any_busy());
     }
 
@@ -539,7 +619,7 @@ mod tests {
     #[test]
     fn unknown_events_are_treated_as_work() {
         let mut h = state();
-        h.apply("SomeFutureHook", "a".into());
+        send(&mut h, "SomeFutureHook", "a");
         assert!(h.any_busy());
     }
 
@@ -550,7 +630,7 @@ mod tests {
             !h.ever_reported,
             "process scan decides until a hook arrives"
         );
-        h.apply("SessionStart", "a".into());
+        send(&mut h, "SessionStart", "a");
         assert!(h.ever_reported);
     }
 }

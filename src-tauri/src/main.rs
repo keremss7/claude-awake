@@ -23,7 +23,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
-use claude_awake_lib::detect::Detector;
+use claude_awake_lib::detect::{Detector, SessionInfo};
 use claude_awake_lib::keepalive::SessionKeepalive;
 use claude_awake_lib::lidwatch::LidWatcher;
 use claude_awake_lib::protocol::{Guards, Profile, Request};
@@ -82,6 +82,9 @@ struct Snapshot {
     claude_busy: bool,
     /// Hook events are driving Auto mode, rather than the coarse process scan.
     precise_detection: bool,
+    /// Every live Claude Code session. The awake decision is machine-wide, so
+    /// this is what makes "which one is holding it up" answerable.
+    sessions: Vec<SessionInfo>,
     helper: HelperStatus,
     helper_detail: String,
     guards: Guards,
@@ -128,6 +131,7 @@ impl Shared {
             claude_active: self.detector.session_present(),
             claude_busy: self.detector.busy(),
             precise_detection: self.detector.precise(),
+            sessions: self.detector.sessions(),
             helper: core.helper,
             helper_detail: core.helper_detail.clone(),
             guards: core.guards,
@@ -367,6 +371,23 @@ fn set_overlay_height(app: AppHandle, shared: State<Arc<Shared>>, height: f64) {
     track_overlay(&app, &shared);
 }
 
+/// Excludes one session from the awake decision. There is deliberately no
+/// per-session "always on": the power state belongs to the machine, not to a
+/// conversation, so the only coherent per-session control is whether it counts.
+#[tauri::command]
+fn set_session_ignored(
+    app: AppHandle,
+    shared: State<Arc<Shared>>,
+    id: String,
+    ignored: bool,
+) -> Snapshot {
+    shared.detector.set_session_ignored(&id, ignored);
+    reconcile(&app, &shared);
+    let snap = shared.snapshot();
+    let _ = app.emit("state", snap.clone());
+    snap
+}
+
 #[tauri::command]
 fn open_panel(app: AppHandle) {
     show_panel(&app);
@@ -599,6 +620,7 @@ fn main() {
             set_keep_display,
             set_autostart,
             set_overlay_height,
+            set_session_ignored,
             open_panel,
             install_helper_command,
             quit_app,

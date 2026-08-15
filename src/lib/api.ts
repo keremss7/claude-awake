@@ -15,6 +15,16 @@ export interface Guards {
   display: boolean;
 }
 
+export interface SessionInfo {
+  id: string;
+  /** Working directory basename, or a short id. */
+  label: string;
+  busy: boolean;
+  /** Excluded from the awake decision. */
+  ignored: boolean;
+  idleSecs: number;
+}
+
 export interface Snapshot {
   mode: Mode;
   /** True when sleep is actually being blocked right now. */
@@ -25,6 +35,8 @@ export interface Snapshot {
   claudeBusy: boolean;
   /** Hook events drive Auto mode, rather than the coarse process scan. */
   preciseDetection: boolean;
+  /** Every live Claude Code session. */
+  sessions: SessionInfo[];
   helper: HelperStatus;
   helperDetail: string;
   guards: Guards;
@@ -42,6 +54,7 @@ export const EMPTY: Snapshot = {
   claudeActive: false,
   claudeBusy: false,
   preciseDetection: false,
+  sessions: [],
   helper: "missing",
   helperDetail: "",
   guards: { lid: false, battery: false, wifi: false, display: false },
@@ -72,6 +85,13 @@ function mockSnapshot(): Snapshot {
     claudeActive: flag("claude"),
     claudeBusy: flag("busy"),
     preciseDetection: flag("precise"),
+    sessions: q.has("sessions")
+      ? [
+          { id: "s1", label: "monorepo", busy: true, ignored: false, idleSecs: 0 },
+          { id: "s2", label: "docs-site", busy: false, ignored: false, idleSecs: 412 },
+          { id: "s3", label: "log-tailer", busy: true, ignored: true, idleSecs: 3 },
+        ]
+      : [],
     helper: (q.get("helper") as HelperStatus) ?? (protecting ? "ok" : "missing"),
     helperDetail: q.get("detail") ?? "",
     guards: {
@@ -104,6 +124,9 @@ export const api = IN_TAURI
        */
       setOverlayHeight: (height: number) =>
         invoke<void>("set_overlay_height", { height }),
+      /** Excludes one session from the awake decision. */
+      setSessionIgnored: (id: string, ignored: boolean) =>
+        invoke<Snapshot>("set_session_ignored", { id, ignored }),
       installHelperCommand: () => invoke<string>("install_helper_command"),
       quit: () => invoke<void>("quit_app"),
     }
@@ -115,6 +138,7 @@ export const api = IN_TAURI
       setAutostart: noop,
       openPanel: async () => {},
       setOverlayHeight: async () => {},
+      setSessionIgnored: noop,
       installHelperCommand: async () => "sudo bash scripts/install-helper.sh",
       quit: async () => {},
     };

@@ -128,8 +128,20 @@ bash scripts/install-hooks.sh            # writes to ~/.claude/settings.json, ba
 bash scripts/install-hooks.sh --remove   # undo
 ```
 
-Four events per session, two per turn; each is one loopback `curl`. The settings panel shows
-which tier is active under **Detection**.
+Each event is one loopback `curl`. The settings panel shows which tier is active under
+**Detection**.
+
+### Several sessions at once
+
+Sleep belongs to the machine, not to a conversation, so the decision is global: **any one
+working session keeps everything awake.** Switching terminal windows never changes it — if a
+refactor is running in one window, moving to an idle session in another does not drop
+protection, and the pill keeps reporting the machine-wide state wherever it is pinned.
+
+The panel lists every live session by working directory, marks which are working, and lets you
+**ignore** one so it stops counting. That is the only per-session control that means anything:
+a per-session "always on" would be indistinguishable from the global one, since a single
+session holding the machine up already holds up all of them.
 
 ## How it works
 

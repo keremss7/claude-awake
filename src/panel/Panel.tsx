@@ -186,6 +186,65 @@ export function Panel() {
           </div>
         </section>
 
+        {/* ── sessions ──────────────────────────────────────────────────── */}
+        {s.sessions.length > 0 && (
+          <section>
+            <Label>Sessions</Label>
+            <div className="rounded-xl border border-black/8 dark:border-white/8 divide-y divide-black/6 dark:divide-white/6 overflow-hidden">
+              {s.sessions.map((session) => (
+                <div
+                  key={session.id}
+                  className="flex items-center gap-2.5 px-3 py-2"
+                >
+                  <span
+                    className={[
+                      "w-1.5 h-1.5 rounded-full shrink-0",
+                      session.ignored
+                        ? "bg-ink-900/15 dark:bg-clay-50/15"
+                        : session.busy
+                          ? "bg-ember-500"
+                          : "bg-ink-900/20 dark:bg-clay-50/20",
+                    ].join(" ")}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className={[
+                        "text-[12px] font-medium truncate",
+                        session.ignored ? "line-through opacity-45" : "",
+                      ].join(" ")}
+                    >
+                      {session.label}
+                    </div>
+                    <div className="text-[10px] text-ink-900/40 dark:text-clay-50/35 tabular-nums">
+                      {session.ignored
+                        ? "ignored"
+                        : session.busy
+                          ? "working"
+                          : `idle ${formatDuration(session.idleSecs)}`}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      api
+                        .setSessionIgnored(session.id, !session.ignored)
+                        .then(setS)
+                        .catch(() => {})
+                    }
+                    className="text-[10px] shrink-0 rounded-md px-1.5 py-1 text-ink-900/40 dark:text-clay-50/35 hover:bg-black/[0.05] dark:hover:bg-white/[0.07] hover:text-ink-900/70 dark:hover:text-clay-50/60 transition-colors"
+                  >
+                    {session.ignored ? "count" : "ignore"}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="text-[10.5px] leading-relaxed text-ink-900/40 dark:text-clay-50/35 mt-2">
+              Any one working session keeps the whole machine awake — sleep belongs
+              to the machine, not to a conversation, so switching windows never
+              changes it. Ignore a session to stop it counting.
+            </p>
+          </section>
+        )}
+
         {/* ── detection ─────────────────────────────────────────────────── */}
         <section>
           <Label>Detection</Label>
