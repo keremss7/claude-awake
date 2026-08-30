@@ -13,6 +13,10 @@ way the moment it stops.
 [![macOS](https://img.shields.io/badge/macOS-11%2B-lightgrey?logo=apple)](#installation)
 [![Windows](https://img.shields.io/badge/Windows-10%2B-lightgrey?logo=windows)](#installation)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?logo=tauri)](https://tauri.app)
+[![Latest release](https://img.shields.io/github/v/release/keremss7/claude-awake?color=D97757)](https://github.com/keremss7/claude-awake/releases/latest)
+
+**[⬇ Download the latest release](https://github.com/keremss7/claude-awake/releases/latest)** —
+universal `.dmg` for macOS, `.exe` installer for Windows
 
 <img src="docs/hero.png" alt="A pill pinned to the top-right of a terminal window reading 'Staying awake — 2h 14m · claude running', with Lid, Battery and Wi-Fi guards lit" width="820">
 
@@ -48,8 +52,8 @@ everything back on its own if the app dies, and an unclean shutdown is repaired 
 
 ### macOS
 
-Download the `.dmg` from [Releases](https://github.com/keremss7/claude-awake/releases), drag
-the app to `/Applications`, and open it once.
+[Download the `.dmg`](https://github.com/keremss7/claude-awake/releases/latest) — one build
+covers both Intel and Apple Silicon. Drag the app to `/Applications` and open it once.
 
 The build is unsigned, so Gatekeeper will complain the first time:
 
@@ -69,8 +73,11 @@ rather not type it.
 
 ### Windows
 
-Download the `.exe` installer from [Releases](https://github.com/keremss7/claude-awake/releases)
-and run it. The installer registers the helper service for you — no extra step.
+[Download the `.exe` installer](https://github.com/keremss7/claude-awake/releases/latest) and
+run it. The installer registers the helper service for you — no extra step.
+
+SmartScreen will warn that the publisher is unknown, because the build is not
+Authenticode-signed: **More info → Run anyway**, or build from source.
 
 > [!NOTE]
 > The Windows build compiles and is checked in CI on every push, but it has not yet been
