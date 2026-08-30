@@ -41,6 +41,10 @@ const OVERLAY_INSET_X: f64 = 14.0;
 const OVERLAY_INSET_Y: f64 = 40.0;
 
 const TRAY_ID: &str = "main";
+/// Must match the plist the autostart plugin writes, which names it after the
+/// product. Spaces are legal in a launchd label, if unusual.
+#[cfg(target_os = "macos")]
+const LAUNCH_AGENT_LABEL: &str = "Claude Awake";
 
 const TICK: Duration = Duration::from_millis(600);
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(30);
@@ -353,6 +357,8 @@ fn set_autostart(app: AppHandle, shared: State<Arc<Shared>>, on: bool) -> Snapsh
     if let Err(e) = result {
         eprintln!("[claude-awake] autostart: {e}");
     }
+    #[cfg(target_os = "macos")]
+    register_launch_agent(on);
     {
         let mut core = shared.core.lock().unwrap();
         core.autostart = manager.is_enabled().unwrap_or(on);
@@ -431,6 +437,54 @@ fn install_helper_command(app: AppHandle) -> String {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+/// Hands the LaunchAgent to launchd, or takes it back.
+///
+/// Writing the plist is not enough on its own — that is all the autostart plugin
+/// does, and an unbootstrapped agent is never registered with Background Task
+/// Management, so it does not run at the next login either. The setting then
+/// looks enabled and silently does nothing, which is exactly what happened here.
+///
+/// `RunAtLoad` means bootstrapping launches a copy immediately; the single-
+/// instance guard makes that copy exit at once.
+#[cfg(target_os = "macos")]
+fn register_launch_agent(enable: bool) {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let plist = std::path::PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join(format!("{LAUNCH_AGENT_LABEL}.plist"));
+    let domain = format!("gui/{}", unsafe { libc::getuid() });
+
+    let output = if enable {
+        if !plist.exists() {
+            return;
+        }
+        // Replace any stale registration rather than erroring on "already loaded".
+        let _ = std::process::Command::new("/bin/launchctl")
+            .args(["bootout", &format!("{domain}/{LAUNCH_AGENT_LABEL}")])
+            .output();
+        std::process::Command::new("/bin/launchctl")
+            .args(["bootstrap", &domain])
+            .arg(&plist)
+            .output()
+    } else {
+        std::process::Command::new("/bin/launchctl")
+            .args(["bootout", &format!("{domain}/{LAUNCH_AGENT_LABEL}")])
+            .output()
+    };
+
+    if let Ok(out) = output {
+        if !out.status.success() {
+            let detail = String::from_utf8_lossy(&out.stderr);
+            let detail = detail.trim();
+            if !detail.is_empty() {
+                eprintln!("[claude-awake] launchctl: {detail}");
+            }
+        }
+    }
 }
 
 // ── settings persistence ────────────────────────────────────────────────────
@@ -613,6 +667,14 @@ fn build_tray(app: &AppHandle, shared: Arc<Shared>) -> tauri::Result<()> {
 
 fn main() {
     tauri::Builder::default()
+        // Must be registered first. A background utility with no main window has
+        // no visible symptom of running twice — but two copies would both drive
+        // the same helper and fight over the hook port, and enabling autostart
+        // bootstraps a LaunchAgent that starts one on the spot. Showing the panel
+        // is the friendliest interpretation of "the user launched it again".
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_panel(app);
+        }))
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
