@@ -18,18 +18,18 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",
     "@tauri-apps/cli": "^2",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
     "tailwindcss": "^4",
     "typescript": "^7.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.3.1"
   },
   "description": "Keeps your machine awake while Claude Code is working \u2014 lid closed, battery ignored, Wi-Fi up.",
   "license": "MIT",
